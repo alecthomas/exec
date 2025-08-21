@@ -50,7 +50,9 @@ func CommandContext(ctx context.Context, name string, arg ...string) *Cmd {
 			panic(err)
 		}
 	})
-	return exec.CommandContext(ctx, extractedPath, append([]string{name}, arg...)...)
+	cmd := exec.CommandContext(ctx, extractedPath, append([]string{name}, arg...)...)
+	cmd.Args[0] = "watchdog"
+	return cmd
 }
 
 func Command(name string, arg ...string) *Cmd {

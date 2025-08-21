@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	stdexec "os/exec"
+
 	"github.com/alecthomas/exec"
 )
 
@@ -218,5 +220,70 @@ func TestConcurrentCommands(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Errorf("Concurrent command %d failed: %v", i, err)
 		}
+	}
+}
+
+func TestProcessGroupCleanup(t *testing.T) {
+	// Build the test program from testdata
+	buildCmd := stdexec.Command("go", "build", "-o", "test-program", "./testdata")
+	buildCmd.Stdout = os.Stdout
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("Failed to build test program: %v", err)
+	}
+	t.Cleanup(func() { os.Remove("test-program") })
+
+	// Start the test program using our exec package
+	testCmd := stdexec.Command("./test-program")
+	if err := testCmd.Start(); err != nil {
+		t.Fatalf("Failed to start test program: %v", err)
+	}
+
+	// Give it time to spawn the sleep processes
+	time.Sleep(1 * time.Second)
+
+	// Get initial process count for sleep processes (use 60 to match updated testdata)
+	countCmd := stdexec.Command("sh", "-c", "pgrep -f 'sleep 60' | wc -l")
+	countOutput, err := countCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to count processes: %v", err)
+	}
+	initialCount := strings.TrimSpace(string(countOutput))
+
+	// Verify we have some sleep processes running
+	if initialCount == "0" {
+		t.Fatal("No sleep processes found - test program may have failed to start them")
+	}
+
+	t.Logf("Initial sleep process count: %s", initialCount)
+
+	// Kill the test program
+	if err := testCmd.Process.Kill(); err != nil {
+		t.Fatalf("Failed to kill test program: %v", err)
+	}
+
+	// Wait for the process to be cleaned up
+	testCmd.Wait()
+
+	// Give the intermediary time to clean up child processes
+	time.Sleep(2 * time.Second)
+
+	// Check that all sleep processes have been cleaned up
+	finalCountCmd := stdexec.Command("sh", "-c", "pgrep -f 'sleep 60' | grep -v 'watchdog' | wc -l")
+	finalCountOutput, err := finalCountCmd.Output()
+	if err != nil {
+		t.Fatalf("Failed to count final processes: %v", err)
+	}
+	finalCount := strings.TrimSpace(string(finalCountOutput))
+
+	t.Logf("Final sleep process count: %s", finalCount)
+
+	// All sleep processes should have been cleaned up
+	if finalCount != "0" {
+		t.Errorf("Expected 0 remaining sleep processes, got %s - process group cleanup may not be working", finalCount)
+
+		// Try to clean up any remaining processes for next tests
+		cleanupCmd := stdexec.Command("sh", "-c", "pkill -f 'sleep 60'")
+		cleanupCmd.Run()
 	}
 }
